@@ -1,0 +1,16 @@
+server:
+  port: 8081
+spring:
+  cloud:
+    gateway:
+      routes:
+        auth_service_route: auth_service
+        project_service_route: project_service
+      uris:
+        auth_service_uri: http://localhost:8080
+        project_service_uri: http://localhost:8083
+cookie:
+  auth: X-AUTH-SESSION
+attributes:
+  role: role
+  sub: sub
