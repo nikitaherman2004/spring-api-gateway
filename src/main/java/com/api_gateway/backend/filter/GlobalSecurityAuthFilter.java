@@ -3,25 +3,27 @@ package com.api_gateway.backend.filter;
 import com.api_gateway.backend.dto.SubjectRoleDto;
 import com.api_gateway.backend.exception.ApplicationException;
 import com.api_gateway.backend.proxy.AuthServiceProxy;
+import com.api_gateway.backend.resolver.CompositeTokenResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
-import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Optional;
 
 @Component
 @RequiredArgsConstructor
 public class GlobalSecurityAuthFilter implements GlobalFilter, Ordered {
+
+    private static final String BEARER = "Bearer";
 
     @Value("${attributes.sub}")
     private String subAttribute;
@@ -29,10 +31,9 @@ public class GlobalSecurityAuthFilter implements GlobalFilter, Ordered {
     @Value("${attributes.role}")
     private String roleAttribute;
 
-    @Value("${cookie.auth}")
-    private String authCookieName;
-
     private final AuthServiceProxy authServiceProxy;
+
+    private final CompositeTokenResolver compositeTokenResolver;
 
     private final SecurityAuthFilterConfiguration filterConfiguration;
 
@@ -51,11 +52,18 @@ public class GlobalSecurityAuthFilter implements GlobalFilter, Ordered {
             ServerHttpRequest request, ServerWebExchange serverWebExchange, GatewayFilterChain chain
     ) {
         try {
-            String accessTokenValue = resolveAccessToken(request);
+            Optional<String> optionalToken = compositeTokenResolver.resolveAccessToken(request);
+
+            if (optionalToken.isEmpty()) {
+                return setResponseCompleteWithStatusCode(serverWebExchange, HttpStatus.UNAUTHORIZED);
+            }
+
+            String accessTokenValue = optionalToken.get();
+
             SubjectRoleDto currentUserInfo = authServiceProxy.getCurrentAuthenticatedUser(accessTokenValue);
 
             ServerWebExchange mutatedExchange = attachAuthHeadersAndMutateExchange(
-                    request, currentUserInfo, serverWebExchange
+                    request, currentUserInfo, accessTokenValue, serverWebExchange
             );
 
             return chain.filter(mutatedExchange);
@@ -64,6 +72,9 @@ public class GlobalSecurityAuthFilter implements GlobalFilter, Ordered {
         }
     }
 
+    /**
+     * This method returns true if at least one request from the list of allowed http requests matches
+     */
     private Boolean allowRequest(ServerHttpRequest request) {
         String requestPath = request.getPath().toString();
 
@@ -74,29 +85,18 @@ public class GlobalSecurityAuthFilter implements GlobalFilter, Ordered {
     }
 
     private ServerWebExchange attachAuthHeadersAndMutateExchange(
-            ServerHttpRequest request, SubjectRoleDto currentUserInfo, ServerWebExchange serverWebExchange
+            ServerHttpRequest request, SubjectRoleDto currentUserInfo,
+            String accessTokenValue, ServerWebExchange serverWebExchange
     ) {
         ServerHttpRequest authenticatedRequest = request.mutate()
                 .header(roleAttribute, currentUserInfo.getRole())
                 .header(subAttribute, currentUserInfo.getSub())
+                .header(BEARER, accessTokenValue)
                 .build();
 
         return serverWebExchange.mutate()
                 .request(authenticatedRequest)
                 .build();
-    }
-
-    private String resolveAccessToken(ServerHttpRequest request) {
-        MultiValueMap<String, HttpCookie> cookieMap = request.getCookies();
-        List<HttpCookie> cookies = cookieMap.get(authCookieName);
-
-        if (cookies == null || cookies.isEmpty()) {
-            throw new ApplicationException("Cookie is empty or null", HttpStatus.UNAUTHORIZED);
-        }
-
-        HttpCookie cookie = cookies.get(0);
-
-        return cookie.getValue();
     }
 
     private Mono<Void> setResponseCompleteWithStatusCode(ServerWebExchange serverWebExchange, HttpStatus httpStatus) {

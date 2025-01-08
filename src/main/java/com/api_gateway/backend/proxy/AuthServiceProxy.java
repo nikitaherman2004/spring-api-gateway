@@ -22,16 +22,21 @@ import java.util.function.Supplier;
 @Service
 public class AuthServiceProxy {
 
-    private static final String BEARER = "Bearer";
+    private static final String AUTHORIZATION = "Authorization";
 
     private final RestTemplate restTemplate = new RestTemplate();
 
     @Value("${spring.cloud.gateway.uris.auth_service_uri}")
     private String authServiceUri;
 
+    /**
+     * This method sends a request to the authorization service,
+     * first adding a header with an access token to the request and, as a response,
+     * receives the user's current role and a unique name from the authorization service
+     */
     public SubjectRoleDto getCurrentAuthenticatedUser(String accessToken) {
         MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
-        headers.add(BEARER, accessToken);
+        headers.add(AUTHORIZATION, accessToken);
 
         RequestEntity<Void> requestEntity = new RequestEntity<>(headers, HttpMethod.GET, createCurrentUserUri());
 
